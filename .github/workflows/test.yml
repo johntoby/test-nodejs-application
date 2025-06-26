@@ -16,6 +16,10 @@ env:
   NODE_ENV: test
   CI: true
 
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   # Job 1: Code Quality Checks
   quality:
@@ -101,12 +105,22 @@ jobs:
   security:
     name: Security Scan
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
     
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
       
       - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+      
+      - name: Run Trivy for SARIF
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
