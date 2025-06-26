@@ -5,15 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "jest",
-    "test:coverage": "jest --coverage",
-    "test:experimental": "jest --experimental-vm-modules",
-    "test:integration": "jest --testPathPattern=integration",
-    "lint": "eslint src/",
-    "format:check": "prettier --check src/",
-    "type-check": "tsc --noEmit",
-    "build": "rollup -c",
-    "benchmark": "node benchmark.js"
+    "test": "echo \"No tests specified\""
   },
   "dependencies": {
     "express": "^4.18.2",

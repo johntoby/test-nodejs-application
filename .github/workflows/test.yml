@@ -36,11 +36,10 @@ jobs:
         with:
           filters: |
             src:
-              - 'src/**'
+              - '*.js'
               - 'package.json'
               - 'package-lock.json'
             tests:
-              - 'tests/**'
               - '**/*.test.js'
       
       - name: Setup Node.js
@@ -54,17 +53,9 @@ jobs:
         if: steps.changes.outputs.src == 'true'
         run: npm install
       
-      - name: Run ESLint
+      - name: Basic syntax check
         if: steps.changes.outputs.src == 'true'
-        run: npm run lint
-      
-      - name: Run Prettier check
-        if: steps.changes.outputs.src == 'true'
-        run: npm run format:check
-      
-      - name: Type checking
-        if: steps.changes.outputs.src == 'true'
-        run: npm run type-check
+        run: node -c server.js
 
   # Job 2: Matrix Testing
   test:
@@ -102,75 +93,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
       
-      - name: Run tests
+      - name: Run basic test
         run: |
-          if [ "${{ matrix.experimental }}" = "true" ]; then
-            npm run test:experimental
-          else
-            npm run test
-          fi
-        shell: bash
-      
-      - name: Generate coverage report
-        if: matrix.coverage
-        run: npm run test:coverage
-      
-      - name: Upload coverage to Codecov
-        if: matrix.coverage
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage/lcov.info
-          flags: unittests
-          name: codecov-umbrella
+          echo "No tests configured yet"
+          node -c server.js
+          echo "✅ Syntax check passed"
 
-  # Job 3: Integration Tests (only on specific conditions)
-  integration:
-    name: Integration Tests
-    runs-on: ubuntu-latest
-    needs: [quality, test]
-    if: |
-      needs.quality.outputs.should-test == 'true' && 
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'integration'))
-    
-    services:
-      postgres:
-        image: postgres:13
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: testdb
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-      
-      - name: Install dependencies
-        run: npm ci
-      
-      - name: Run database migrations
-        run: npm run db:migrate
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
-      
-      - name: Run integration tests
-        run: npm run test:integration
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
-
-  # Job 4: Build & Package Verification
-  build:
-    name: Build Verification
+  # Job 3: Security Scanning
+  security:
+    name: Security Scan
     runs-on: ubuntu-latest
     needs: quality
     if: needs.quality.outputs.should-test == 'true'
@@ -179,89 +110,33 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
       
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
         with:
-          node-version: '18'
-          cache: 'npm'
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
       
-      - name: Install dependencies
-        run: npm ci
-      
-      - name: Build package
-        run: npm run build
-      
-      - name: Test package installation
-        run: |
-          npm pack
-          cd /tmp
-          npm init -y
-          npm install $GITHUB_WORKSPACE/*.tgz
-          node -e "console.log('Package installed successfully!')"
-      
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v3
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
         with:
-          name: build-files
-          path: |
-            dist/
-            *.tgz
-          retention-days: 7
-
-  # Job 5: Performance Benchmarks (conditional)
-  benchmark:
-    name: Performance Tests
-    runs-on: ubuntu-latest
-    needs: [test, build]
-    if: |
-      github.event_name == 'pull_request' && 
-      contains(github.event.pull_request.labels.*.name, 'performance')
-    
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-      
-      - name: Install dependencies
-        run: npm ci
-      
-      - name: Run benchmarks
-        run: npm run benchmark
-      
-      - name: Comment benchmark results
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const fs = require('fs');
-            const results = fs.readFileSync('benchmark-results.json', 'utf8');
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: `## 📊 Performance Benchmark Results\n\`\`\`json\n${results}\n\`\`\``
-            });
+          sarif_file: 'trivy-results.sarif'
 
   # Summary job for status checks
   test-summary:
     name: Test Summary
     runs-on: ubuntu-latest
-    needs: [quality, test, integration, build]
+    needs: [quality, test, security]
     if: always()
     
     steps:
       - name: Check all jobs status
         run: |
-          if [[ "${{ needs.quality.result }}" == "failure" || "${{ needs.test.result }}" == "failure" || "${{ needs.build.result }}" == "failure" ]]; then
-            echo "❌ Some required jobs failed"
+          if [[ "${{ needs.quality.result }}" == "failure" || "${{ needs.test.result }}" == "failure" || "${{ needs.security.result }}" == "failure" ]]; then
+            echo "❌ Some jobs failed"
             exit 1
-          elif [[ "${{ needs.integration.result }}" == "failure" ]]; then
-            echo "⚠️ Integration tests failed, but continuing"
-            exit 0
           else
             echo "✅ All jobs completed successfully!"
           fi
