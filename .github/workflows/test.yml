@@ -61,8 +61,6 @@ jobs:
   test:
     name: Test Suite
     runs-on: ${{ matrix.os }}
-    needs: quality
-    if: needs.quality.outputs.should-test == 'true'
     
     strategy:
       fail-fast: false
@@ -103,8 +101,6 @@ jobs:
   security:
     name: Security Scan
     runs-on: ubuntu-latest
-    needs: quality
-    if: needs.quality.outputs.should-test == 'true'
     
     steps:
       - name: Checkout code
