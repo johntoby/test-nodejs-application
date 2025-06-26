@@ -1,0 +1,267 @@
+name: Advanced Testing Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+  pull_request:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+
+env:
+  NODE_ENV: test
+  CI: true
+
+jobs:
+  # Job 1: Code Quality Checks
+  quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    outputs:
+      should-test: ${{ steps.changes.outputs.src }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Detect file changes
+        uses: dorny/paths-filter@v2
+        id: changes
+        with:
+          filters: |
+            src:
+              - 'src/**'
+              - 'package.json'
+              - 'package-lock.json'
+            tests:
+              - 'tests/**'
+              - '**/*.test.js'
+      
+      - name: Setup Node.js
+        if: steps.changes.outputs.src == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        if: steps.changes.outputs.src == 'true'
+        run: npm ci
+      
+      - name: Run ESLint
+        if: steps.changes.outputs.src == 'true'
+        run: npm run lint
+      
+      - name: Run Prettier check
+        if: steps.changes.outputs.src == 'true'
+        run: npm run format:check
+      
+      - name: Type checking
+        if: steps.changes.outputs.src == 'true'
+        run: npm run type-check
+
+  # Job 2: Matrix Testing
+  test:
+    name: Test Suite
+    runs-on: ${{ matrix.os }}
+    needs: quality
+    if: needs.quality.outputs.should-test == 'true'
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [16, 18, 20]
+        include:
+          # Test latest features on Node 20 + Ubuntu
+          - os: ubuntu-latest
+            node: 20
+            experimental: true
+            coverage: true
+        exclude:
+          # Skip Windows + Node 16 (known compatibility issues)
+          - os: windows-latest
+            node: 16
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run tests
+        run: |
+          if [ "${{ matrix.experimental }}" = "true" ]; then
+            npm run test:experimental
+          else
+            npm run test
+          fi
+        shell: bash
+      
+      - name: Generate coverage report
+        if: matrix.coverage
+        run: npm run test:coverage
+      
+      - name: Upload coverage to Codecov
+        if: matrix.coverage
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage/lcov.info
+          flags: unittests
+          name: codecov-umbrella
+
+  # Job 3: Integration Tests (only on specific conditions)
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: [quality, test]
+    if: |
+      needs.quality.outputs.should-test == 'true' && 
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'integration'))
+    
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: testdb
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run database migrations
+        run: npm run db:migrate
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
+      
+      - name: Run integration tests
+        run: npm run test:integration
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
+
+  # Job 4: Build & Package Verification
+  build:
+    name: Build Verification
+    runs-on: ubuntu-latest
+    needs: quality
+    if: needs.quality.outputs.should-test == 'true'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Build package
+        run: npm run build
+      
+      - name: Test package installation
+        run: |
+          npm pack
+          cd /tmp
+          npm init -y
+          npm install $GITHUB_WORKSPACE/*.tgz
+          node -e "console.log('Package installed successfully!')"
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-files
+          path: |
+            dist/
+            *.tgz
+          retention-days: 7
+
+  # Job 5: Performance Benchmarks (conditional)
+  benchmark:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    needs: [test, build]
+    if: |
+      github.event_name == 'pull_request' && 
+      contains(github.event.pull_request.labels.*.name, 'performance')
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+      
+      - name: Install dependencies
+        run: npm ci
+      
+      - name: Run benchmarks
+        run: npm run benchmark
+      
+      - name: Comment benchmark results
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const results = fs.readFileSync('benchmark-results.json', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 📊 Performance Benchmark Results\n\`\`\`json\n${results}\n\`\`\``
+            });
+
+  # Summary job for status checks
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [quality, test, integration, build]
+    if: always()
+    
+    steps:
+      - name: Check all jobs status
+        run: |
+          if [[ "${{ needs.quality.result }}" == "failure" || "${{ needs.test.result }}" == "failure" || "${{ needs.build.result }}" == "failure" ]]; then
+            echo "❌ Some required jobs failed"
+            exit 1
+          elif [[ "${{ needs.integration.result }}" == "failure" ]]; then
+            echo "⚠️ Integration tests failed, but continuing"
+            exit 0
+          else
+            echo "✅ All jobs completed successfully!"
+          fi

@@ -1,0 +1,23 @@
+{
+  "name": "nobel-prize-app",
+  "version": "1.0.0",
+  "description": "Simple app to display Nobel Prize winners",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "jest",
+    "test:coverage": "jest --coverage",
+    "test:experimental": "jest --experimental-vm-modules",
+    "test:integration": "jest --testPathPattern=integration",
+    "lint": "eslint src/",
+    "format:check": "prettier --check src/",
+    "type-check": "tsc --noEmit",
+    "build": "rollup -c",
+    "benchmark": "node benchmark.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "axios": "^1.6.0"
+  }
+
+}
