@@ -52,7 +52,7 @@ jobs:
       
       - name: Install dependencies
         if: steps.changes.outputs.src == 'true'
-        run: npm ci
+        run: npm install
       
       - name: Run ESLint
         if: steps.changes.outputs.src == 'true'
